@@ -154,6 +154,25 @@ rm -rf /h-ui
 Export the user, system configuration, and Hysteria2 configuration in the management background, redeploy the latest
 version of h-ui, and import the data into the management background after the deployment is complete.
 
+## DNS options (advanced, opt-in)
+
+By default h-ui uses the OS resolver. If your environment has issues with UDP/EDNS
+(e.g. forwarders returning SERVFAIL for AAAA), you can switch to Go resolver and/or force TCP
+to the same nameservers from /etc/resolv.conf:
+
+- `HUI_DNS_PREFER_GO=1`          # use Go resolver
+- `HUI_DNS_TRANSPORT=tcp|udp`    # force transport to nameserver (default: OS)
+- `HUI_DNS_FORCE_TCP=1`          # shorthand for TRANSPORT=tcp
+- `HUI_DNS_IPV4_ONLY=1`          # use tcp4/udp4 to nameserver (does not disable AAAA queries)
+- `HUI_DNS_TIMEOUT=2s`           # dial timeout to nameserver
+- `HUI_DNS_STRICT_ERRORS=0|1`    # pass-through to net.Resolver.StrictErrors (default: 0)
+
+Example:
+
+```bash
+HUI_DNS_PREFER_GO=1 HUI_DNS_TRANSPORT=tcp ./h-ui-linux-amd64 -p 4433
+```
+
 ## FAQ
 
 [English > FAQ](./docs/FAQ.md)
