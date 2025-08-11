@@ -36,36 +36,59 @@ func NewNoEDNSResolver() *NoEDNSResolver {
 	return &NoEDNSResolver{servers: servers, timeout: 2 * time.Second, network: "udp"}
 }
 
-func (r *NoEDNSResolver) lookupQtype(ctx context.Context, name string, qtype uint16) (net.IP, error) {
+func (r *NoEDNSResolver) exchangeNoEDNS(ctx context.Context, qname string, qtype uint16, netw, server string) (*dns.Msg, error) {
 	q := new(dns.Msg)
 	q.Id = dns.Id()
 	q.RecursionDesired = true
 	q.Question = []dns.Question{{
-		Name:   dns.Fqdn(name),
+		Name:   dns.Fqdn(qname),
 		Qtype:  qtype,
 		Qclass: dns.ClassINET,
 	}}
-	c := &dns.Client{Net: r.network, Timeout: r.timeout, SingleInflight: true}
-	for _, srv := range r.servers {
-		in, _, err := c.ExchangeContext(ctx, q, srv)
-		if err != nil {
-			continue
-		}
-		if in == nil || in.Rcode != dns.RcodeSuccess {
-			continue
-		}
-		for _, ans := range in.Answer {
-			switch rr := ans.(type) {
-			case *dns.A:
-				if qtype == dns.TypeA && rr.A != nil {
-					return rr.A, nil
+	c := &dns.Client{Net: netw, Timeout: r.timeout, SingleInflight: true}
+	in, _, err := c.ExchangeContext(ctx, q, server)
+	return in, err
+}
+func (r *NoEDNSResolver) lookupQtype(ctx context.Context, name string, qtype uint16) (net.IP, error) {
+	const maxCNAME = 10
+	current := name
+	for hop := 0; hop < maxCNAME; hop++ {
+		var nextCNAME string
+		for _, srv := range r.servers {
+			in, err := r.exchangeNoEDNS(ctx, current, qtype, "udp", srv)
+			if err != nil {
+				continue
+			}
+			if in == nil {
+				continue
+			}
+			if in.Truncated {
+				if inTCP, err2 := r.exchangeNoEDNS(ctx, current, qtype, "tcp", srv); err2 == nil && inTCP != nil {
+					in = inTCP
 				}
-			case *dns.AAAA:
-				if qtype == dns.TypeAAAA && rr.AAAA != nil {
-					return rr.AAAA, nil
+			}
+			if in.Rcode != dns.RcodeSuccess {
+				continue
+			}
+			for _, ans := range in.Answer {
+				switch rr := ans.(type) {
+				case *dns.A:
+					if qtype == dns.TypeA && rr.A != nil {
+						return rr.A, nil
+					}
+				case *dns.AAAA:
+					if qtype == dns.TypeAAAA && rr.AAAA != nil {
+						return rr.AAAA, nil
+					}
+				case *dns.CNAME:
+					nextCNAME = rr.Target
 				}
 			}
 		}
+		if nextCNAME == "" {
+			break
+		}
+		current = nextCNAME
 	}
 	return nil, fmt.Errorf("no %s record for %s", dns.TypeToString[qtype], name)
 }
