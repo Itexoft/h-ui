@@ -53,8 +53,8 @@ func InitTelegramBot() error {
 	}
 	bot, err = tgbotapi.NewBotAPI(token)
 	if err != nil {
-		logrus.Errorf("new bot api err: %v", err)
-		return err
+		logrus.Errorf("telegram init failed: %v", err)
+		return fmt.Errorf("telegram init failed: %w", err)
 	}
 	bot.Debug = os.Getenv(constant.TelegramDebug) == "true"
 	logrus.Infof("Authorized on account %s", bot.Self.UserName)
@@ -178,23 +178,26 @@ func GetMe() (tgbotapi.User, error) {
 }
 
 func SendWithMessage(chatId int64, text string) error {
+	if bot == nil {
+		return fmt.Errorf("telegram init failed")
+	}
 	message := tgbotapi.NewMessage(chatId, text)
 	if _, err := bot.Send(message); err != nil {
 		logrus.Errorf("tg api SendMessage err: %v chatId: %d text: %s", err, chatId, text)
-		return err
+		return fmt.Errorf("telegram send failed: %w", err)
 	}
 	return nil
 }
 
 // TelegramLoginRemind 登录提醒
-func TelegramLoginRemind(username string, ip string) {
+func TelegramLoginRemind(username string, ip string) error {
 	configs, err := dao.ListConfig("key in ?", []string{
 		constant.TelegramEnable,
 		constant.TelegramChatId,
 		constant.TelegramLoginJobEnable,
 		constant.TelegramLoginJobText})
 	if err != nil {
-		return
+		return err
 	}
 	var telegramEnable, telegramChatId, telegramLoginJobEnable, telegramLoginJobText = "0", "", "0", ""
 	for _, item := range configs {
@@ -214,13 +217,13 @@ func TelegramLoginRemind(username string, ip string) {
 	}
 
 	if telegramEnable != "1" || telegramChatId == "" || telegramLoginJobEnable != "1" || telegramLoginJobText == "" {
-		return
+		return nil
 	}
 
 	chatId, err := strconv.ParseInt(telegramChatId, 10, 64)
 	if err != nil {
 		logrus.Errorf("parse chatId err: %v", err)
-		return
+		return err
 	}
 
 	telegramLoginJobText = strings.ReplaceAll(telegramLoginJobText, "[time]", time.Now().Format("2006-01-02 15:04:05"))
@@ -228,6 +231,7 @@ func TelegramLoginRemind(username string, ip string) {
 	telegramLoginJobText = strings.ReplaceAll(telegramLoginJobText, "[ip]", ip)
 
 	if err = SendWithMessage(chatId, fmt.Sprintf("【H UI】\n%s", telegramLoginJobText)); err != nil {
-		return
+		return err
 	}
+	return nil
 }
