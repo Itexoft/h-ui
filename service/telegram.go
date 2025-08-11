@@ -1,12 +1,15 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 	"h-ui/dao"
+	dnsresolver "h-ui/internal/dnsresolver"
 	"h-ui/model/constant"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -19,46 +22,75 @@ var done = make(chan bool)
 
 // 参数校验
 func valid() (string, string, error) {
+	logrus.Info("telegram validation start")
 	enable, err := dao.GetConfig("key = ?", constant.TelegramEnable)
 	if err != nil {
+		logrus.Errorf("get TELEGRAM_ENABLE err: %v", err)
 		return "", "", err
 	}
 	if enable.Value == nil || *enable.Value != "1" {
+		logrus.Info("telegram disabled")
 		return "", "", errors.New("telegram not enable")
 	}
+	logrus.Info("telegram enabled")
 	token, err := dao.GetConfig("key = ?", constant.TelegramToken)
 	if err != nil {
+		logrus.Errorf("get TELEGRAM_TOKEN err: %v", err)
 		return "", "", err
 	}
 	if token.Value == nil || *token.Value == "" {
+		logrus.Error("telegram token missing")
 		return "", "", errors.New("telegram token not set")
 	}
+	logrus.Infof("telegram token length=%d", len(*token.Value))
 	chatId, err := dao.GetConfig("key = ?", constant.TelegramChatId)
 	if err != nil {
+		logrus.Errorf("get TELEGRAM_CHAT_ID err: %v", err)
 		return "", "", err
 	}
 	if chatId.Value == nil {
+		logrus.Error("telegram chatId is nil")
 		return "", "", errors.New("telegram chatId is nil")
 	}
+	logrus.Infof("telegram chatId=%s", *chatId.Value)
+	logrus.Info("telegram validation done")
 	return *token.Value, *chatId.Value, nil
 }
 
 func InitTelegramBot() error {
+	logrus.Info("telegram init start")
 	token, chatId, err := valid()
 	if err != nil {
+		logrus.Errorf("telegram validation err: %v", err)
 		if err.Error() == "telegram not enable" {
+			logrus.Info("telegram not enabled")
 			return nil
 		}
 		return err
 	}
-	bot, err = tgbotapi.NewBotAPI(token)
-	if err != nil {
-		logrus.Errorf("new bot api err: %v", err)
-		return err
+	logrus.Infof("telegram token length=%d chatId=%s", len(token), chatId)
+	res := dnsresolver.New()
+	logrus.Info("dns resolver created")
+	a, aaaa, dnsErr := res.LookupAll(context.Background(), "api.telegram.org")
+	if dnsErr != nil {
+		logrus.Errorf("dns lookup api.telegram.org err: %v", dnsErr)
+	} else {
+		logrus.Infof("dns lookup api.telegram.org a=%v aaaa=%v", a, aaaa)
 	}
+	tr := dnsresolver.NewTransport(res, "api.telegram.org")
+	logrus.Info("dns transport created")
+	httpClient := &http.Client{Transport: tr, Timeout: 15 * time.Second}
+	logrus.Info("http client created")
+	logrus.Info("creating telegram bot api")
+	bot, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
+	if err != nil {
+		logrus.Errorf("telegram init failed: %v", err)
+		return fmt.Errorf("telegram init failed: %w", err)
+	}
+	logrus.Info("telegram bot api created")
 	bot.Debug = os.Getenv(constant.TelegramDebug) == "true"
-	logrus.Infof("Authorized on account %s", bot.Self.UserName)
-	// 初始化 menu
+	logrus.Infof("telegram debug=%v", bot.Debug)
+	logrus.Infof("authorized on account %s", bot.Self.UserName)
 	commands := []tgbotapi.BotCommand{
 		{Command: "status", Description: "System Status"},
 		{Command: "restart", Description: "System Restart"},
@@ -71,7 +103,7 @@ func InitTelegramBot() error {
 		logrus.Errorf("unable to set commands err: %v", err)
 		return err
 	}
-	// 处理消息
+	logrus.Info("telegram commands set")
 	go func(done chan bool) {
 		updates := getUpdatesChan()
 		for {
@@ -86,6 +118,7 @@ func InitTelegramBot() error {
 			}
 		}
 	}(done)
+	logrus.Info("telegram init done")
 	return nil
 }
 
@@ -169,32 +202,67 @@ func handleDefault(update tgbotapi.Update) error {
 }
 
 func GetMe() (tgbotapi.User, error) {
-	user, err := bot.GetMe()
-	if err != nil {
-		logrus.Errorf("tg api GetMe err: %v", err)
-		return tgbotapi.User{}, err
+	if bot == nil {
+		return tgbotapi.User{}, fmt.Errorf("telegram init failed")
 	}
-	return user, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	type result struct {
+		u tgbotapi.User
+		e error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		user, err := bot.GetMe()
+		ch <- result{user, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.e != nil {
+			logrus.Warnf("tg api GetMe err: %v", r.e)
+			return tgbotapi.User{}, r.e
+		}
+		return r.u, nil
+	case <-ctx.Done():
+		logrus.Warnf("tg api GetMe timeout")
+		return tgbotapi.User{}, ctx.Err()
+	}
 }
 
 func SendWithMessage(chatId int64, text string) error {
-	message := tgbotapi.NewMessage(chatId, text)
-	if _, err := bot.Send(message); err != nil {
-		logrus.Errorf("tg api SendMessage err: %v chatId: %d text: %s", err, chatId, text)
-		return err
+	if bot == nil {
+		return fmt.Errorf("telegram init failed")
 	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch := make(chan error, 1)
+	go func() {
+		message := tgbotapi.NewMessage(chatId, text)
+		_, err := bot.Send(message)
+		ch <- err
+	}()
+	select {
+	case err := <-ch:
+		if err != nil {
+			logrus.Warnf("tg api SendMessage err: %v chatId: %d text: %s", err, chatId, text)
+			return fmt.Errorf("telegram send failed: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		logrus.Warnf("tg api SendMessage timeout chatId: %d text: %s", chatId, text)
+		return ctx.Err()
+	}
 }
 
 // TelegramLoginRemind 登录提醒
-func TelegramLoginRemind(username string, ip string) {
+func telegramLoginRemind(username string, ip string) error {
 	configs, err := dao.ListConfig("key in ?", []string{
 		constant.TelegramEnable,
 		constant.TelegramChatId,
 		constant.TelegramLoginJobEnable,
 		constant.TelegramLoginJobText})
 	if err != nil {
-		return
+		return err
 	}
 	var telegramEnable, telegramChatId, telegramLoginJobEnable, telegramLoginJobText = "0", "", "0", ""
 	for _, item := range configs {
@@ -214,13 +282,13 @@ func TelegramLoginRemind(username string, ip string) {
 	}
 
 	if telegramEnable != "1" || telegramChatId == "" || telegramLoginJobEnable != "1" || telegramLoginJobText == "" {
-		return
+		return nil
 	}
 
 	chatId, err := strconv.ParseInt(telegramChatId, 10, 64)
 	if err != nil {
 		logrus.Errorf("parse chatId err: %v", err)
-		return
+		return err
 	}
 
 	telegramLoginJobText = strings.ReplaceAll(telegramLoginJobText, "[time]", time.Now().Format("2006-01-02 15:04:05"))
@@ -228,6 +296,19 @@ func TelegramLoginRemind(username string, ip string) {
 	telegramLoginJobText = strings.ReplaceAll(telegramLoginJobText, "[ip]", ip)
 
 	if err = SendWithMessage(chatId, fmt.Sprintf("【H UI】\n%s", telegramLoginJobText)); err != nil {
-		return
+		return err
 	}
+	return nil
 }
+
+var TelegramLoginRemind = telegramLoginRemind
+
+func telegram2FAEnabled(username string) bool {
+	config, err := dao.GetConfig("key = ?", constant.Telegram2FAEnable)
+	if err != nil || config.Value == nil {
+		return false
+	}
+	return *config.Value == "1"
+}
+
+var Telegram2FAEnabled = telegram2FAEnabled
