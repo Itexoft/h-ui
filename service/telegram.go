@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -169,28 +170,60 @@ func handleDefault(update tgbotapi.Update) error {
 }
 
 func GetMe() (tgbotapi.User, error) {
-	user, err := bot.GetMe()
-	if err != nil {
-		logrus.Errorf("tg api GetMe err: %v", err)
-		return tgbotapi.User{}, err
+	if bot == nil {
+		return tgbotapi.User{}, fmt.Errorf("telegram init failed")
 	}
-	return user, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	type result struct {
+		u tgbotapi.User
+		e error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		user, err := bot.GetMe()
+		ch <- result{user, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.e != nil {
+			logrus.Warnf("tg api GetMe err: %v", r.e)
+			return tgbotapi.User{}, r.e
+		}
+		return r.u, nil
+	case <-ctx.Done():
+		logrus.Warnf("tg api GetMe timeout")
+		return tgbotapi.User{}, ctx.Err()
+	}
 }
 
 func SendWithMessage(chatId int64, text string) error {
 	if bot == nil {
 		return fmt.Errorf("telegram init failed")
 	}
-	message := tgbotapi.NewMessage(chatId, text)
-	if _, err := bot.Send(message); err != nil {
-		logrus.Errorf("tg api SendMessage err: %v chatId: %d text: %s", err, chatId, text)
-		return fmt.Errorf("telegram send failed: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch := make(chan error, 1)
+	go func() {
+		message := tgbotapi.NewMessage(chatId, text)
+		_, err := bot.Send(message)
+		ch <- err
+	}()
+	select {
+	case err := <-ch:
+		if err != nil {
+			logrus.Warnf("tg api SendMessage err: %v chatId: %d text: %s", err, chatId, text)
+			return fmt.Errorf("telegram send failed: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		logrus.Warnf("tg api SendMessage timeout chatId: %d text: %s", chatId, text)
+		return ctx.Err()
 	}
-	return nil
 }
 
 // TelegramLoginRemind 登录提醒
-func TelegramLoginRemind(username string, ip string) error {
+func telegramLoginRemind(username string, ip string) error {
 	configs, err := dao.ListConfig("key in ?", []string{
 		constant.TelegramEnable,
 		constant.TelegramChatId,
@@ -235,3 +268,15 @@ func TelegramLoginRemind(username string, ip string) error {
 	}
 	return nil
 }
+
+var TelegramLoginRemind = telegramLoginRemind
+
+func telegram2FAEnabled(username string) bool {
+	config, err := dao.GetConfig("key = ?", constant.Telegram2FAEnable)
+	if err != nil || config.Value == nil {
+		return false
+	}
+	return *config.Value == "1"
+}
+
+var Telegram2FAEnabled = telegram2FAEnabled
