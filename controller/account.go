@@ -11,6 +11,7 @@ import (
 	"h-ui/service"
 	"h-ui/util"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -35,7 +36,10 @@ func Login(c *gin.Context) {
 		TokenType:   constant.TokenType,
 		AccessToken: token,
 	}
-	service.TelegramLoginRemind(*loginDto.Username, c.ClientIP())
+	if err := service.TelegramLoginRemind(*loginDto.Username, c.ClientIP()); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"msg": "Telegram unreachable", "error": err.Error()})
+		return
+	}
 	vo.Success(jwtVo, c)
 }
 
