@@ -1,8 +1,7 @@
-package dnsinit
+package main
 
 import (
 	"context"
-	"log"
 	"net"
 	"os"
 	"strings"
@@ -22,29 +21,33 @@ func envStr(k, def string) string {
 }
 
 func init() {
-	debug := envBool("HUI_DNS_DEBUG")
-	preferGo := envBool("HUI_DNS_PREFER_GO")
-	transport := strings.ToLower(envStr("HUI_DNS_TRANSPORT", ""))
-	ipv4Only := envBool("HUI_DNS_IPV4_ONLY")
-	timeoutVar := envStr("HUI_DNS_TIMEOUT", "")
-	strictVar := envStr("HUI_DNS_STRICT_ERRORS", "")
-	timeout := 2 * time.Second
-	if timeoutVar != "" {
-		if d, err := time.ParseDuration(timeoutVar); err == nil {
-			timeout = d
-		}
-	}
-	strict := envBool("HUI_DNS_STRICT_ERRORS")
-	if !preferGo && transport == "" && !ipv4Only && timeoutVar == "" && strictVar == "" {
-		if debug {
-			log.Printf("dns resolver prefer_go=%v transport=%s ipv4_only=%v strict_errors=%v timeout=%s", false, "", false, false, timeout)
-		}
+	if os.Getenv("HUI_DNS_PREFER_GO") == "" &&
+		os.Getenv("HUI_DNS_TRANSPORT") == "" &&
+		os.Getenv("HUI_DNS_FORCE_TCP") == "" &&
+		os.Getenv("HUI_DNS_IPV4_ONLY") == "" &&
+		os.Getenv("HUI_DNS_TIMEOUT") == "" &&
+		os.Getenv("HUI_DNS_STRICT_ERRORS") == "" {
 		return
 	}
 
-	pg := preferGo || transport != "" || ipv4Only
+	preferGo := envBool("HUI_DNS_PREFER_GO")
+	strict := envBool("HUI_DNS_STRICT_ERRORS")
+
+	transport := strings.ToLower(envStr("HUI_DNS_TRANSPORT", ""))
+	if transport == "" && envBool("HUI_DNS_FORCE_TCP") {
+		transport = "tcp"
+	}
+	ipv4Only := envBool("HUI_DNS_IPV4_ONLY")
+
+	timeout := 2 * time.Second
+	if t := envStr("HUI_DNS_TIMEOUT", ""); t != "" {
+		if d, err := time.ParseDuration(t); err == nil {
+			timeout = d
+		}
+	}
+
 	net.DefaultResolver = &net.Resolver{
-		PreferGo:     pg,
+		PreferGo:     preferGo || transport != "" || ipv4Only,
 		StrictErrors: strict,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			netw := network
@@ -64,9 +67,5 @@ func init() {
 			d := &net.Dialer{Timeout: timeout}
 			return d.DialContext(ctx, netw, address)
 		},
-	}
-  
-	if debug {
-		log.Printf("dns resolver prefer_go=%v transport=%s ipv4_only=%v strict_errors=%v timeout=%s", pg, transport, ipv4Only, strict, timeout)
 	}
 }
