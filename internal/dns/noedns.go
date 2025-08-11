@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -17,23 +16,11 @@ type NoEDNSResolver struct {
 }
 
 func NewNoEDNSResolver() *NoEDNSResolver {
-	cfg, err := dns.ClientConfigFromFile("/etc/resolv.conf")
-	servers := []string{"127.0.0.1:53"}
-	if err == nil && len(cfg.Servers) > 0 {
-		servers = servers[:0]
-		for _, s := range cfg.Servers {
-			host := s
-			if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-				host = "[" + host + "]"
-			}
-			port := cfg.Port
-			if port == "" {
-				port = "53"
-			}
-			servers = append(servers, net.JoinHostPort(host, port))
-		}
+	return &NoEDNSResolver{
+		servers: []string{"127.0.0.1:53", "[::1]:53"},
+		timeout: 2 * time.Second,
+		network: "udp",
 	}
-	return &NoEDNSResolver{servers: servers, timeout: 2 * time.Second, network: "udp"}
 }
 
 func (r *NoEDNSResolver) exchangeNoEDNS(ctx context.Context, qname string, qtype uint16, netw, server string) (*dns.Msg, error) {
@@ -56,18 +43,7 @@ func (r *NoEDNSResolver) lookupQtype(ctx context.Context, name string, qtype uin
 		var nextCNAME string
 		for _, srv := range r.servers {
 			in, err := r.exchangeNoEDNS(ctx, current, qtype, "udp", srv)
-			if err != nil {
-				continue
-			}
-			if in == nil {
-				continue
-			}
-			if in.Truncated {
-				if inTCP, err2 := r.exchangeNoEDNS(ctx, current, qtype, "tcp", srv); err2 == nil && inTCP != nil {
-					in = inTCP
-				}
-			}
-			if in.Rcode != dns.RcodeSuccess {
+			if err != nil || in == nil {
 				continue
 			}
 			for _, ans := range in.Answer {
@@ -82,6 +58,30 @@ func (r *NoEDNSResolver) lookupQtype(ctx context.Context, name string, qtype uin
 					}
 				case *dns.CNAME:
 					nextCNAME = rr.Target
+				}
+			}
+			if nextCNAME != "" {
+				break
+			}
+			if in.Truncated || in.Rcode != dns.RcodeSuccess || len(in.Answer) == 0 {
+				if inTCP, err2 := r.exchangeNoEDNS(ctx, current, qtype, "tcp", srv); err2 == nil && inTCP != nil {
+					for _, ans := range inTCP.Answer {
+						switch rr := ans.(type) {
+						case *dns.A:
+							if qtype == dns.TypeA && rr.A != nil {
+								return rr.A, nil
+							}
+						case *dns.AAAA:
+							if qtype == dns.TypeAAAA && rr.AAAA != nil {
+								return rr.AAAA, nil
+							}
+						case *dns.CNAME:
+							nextCNAME = rr.Target
+						}
+					}
+					if nextCNAME != "" {
+						break
+					}
 				}
 			}
 		}
@@ -99,6 +99,9 @@ func (r *NoEDNSResolver) LookupAnyOnce(ctx context.Context, name string) (net.IP
 	}
 	if ip6, err := r.lookupQtype(ctx, name, dns.TypeAAAA); err == nil {
 		return ip6, nil
+	}
+	if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, name); err == nil && len(addrs) > 0 {
+		return addrs[0].IP, nil
 	}
 	return nil, fmt.Errorf("no A/AAAA records for %s", name)
 }
