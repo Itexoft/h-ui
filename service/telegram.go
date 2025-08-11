@@ -48,7 +48,7 @@ func valid() (string, string, error) {
 }
 
 func InitTelegramBot() error {
-	logrus.Info("dns resolver: no-edns=DEFAULT (A-only, UDP 512, no OPT)")
+	logrus.Info("dns resolver: no-edns=DEFAULT (A/AAAA over UDP 512, no OPT)")
 	token, chatId, err := valid()
 	if err != nil {
 		if err.Error() == "telegram not enable" {
@@ -65,11 +65,12 @@ func InitTelegramBot() error {
 			if err != nil {
 				return nil, err
 			}
-			ip, err := res.LookupAOnce(ctx, host)
+			ip, err := res.LookupAnyOnce(ctx, host)
 			if err != nil {
 				return nil, err
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			dialAddr := net.JoinHostPort(ip.String(), port)
+			return dialer.DialContext(ctx, "tcp", dialAddr)
 		},
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
