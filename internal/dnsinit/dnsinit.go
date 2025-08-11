@@ -22,23 +22,24 @@ func envStr(k, def string) string {
 }
 
 func init() {
-	if os.Getenv("HUI_DNS_PREFER_GO") == "" &&
-		os.Getenv("HUI_DNS_TRANSPORT") == "" &&
-		os.Getenv("HUI_DNS_IPV4_ONLY") == "" &&
-		os.Getenv("HUI_DNS_TIMEOUT") == "" &&
-		os.Getenv("HUI_DNS_STRICT_ERRORS") == "" {
-		return
-	}
-
+	debug := envBool("HUI_DNS_DEBUG")
 	preferGo := envBool("HUI_DNS_PREFER_GO")
-	strict := envBool("HUI_DNS_STRICT_ERRORS")
 	transport := strings.ToLower(envStr("HUI_DNS_TRANSPORT", ""))
 	ipv4Only := envBool("HUI_DNS_IPV4_ONLY")
+	timeoutVar := envStr("HUI_DNS_TIMEOUT", "")
+	strictVar := envStr("HUI_DNS_STRICT_ERRORS", "")
 	timeout := 2 * time.Second
-	if t := envStr("HUI_DNS_TIMEOUT", ""); t != "" {
-		if d, err := time.ParseDuration(t); err == nil {
+	if timeoutVar != "" {
+		if d, err := time.ParseDuration(timeoutVar); err == nil {
 			timeout = d
 		}
+	}
+	strict := envBool("HUI_DNS_STRICT_ERRORS")
+	if !preferGo && transport == "" && !ipv4Only && timeoutVar == "" && strictVar == "" {
+		if debug {
+			log.Printf("dns resolver prefer_go=%v transport=%s ipv4_only=%v strict_errors=%v timeout=%s", false, "", false, false, timeout)
+		}
+		return
 	}
 
 	pg := preferGo || transport != "" || ipv4Only
@@ -64,8 +65,8 @@ func init() {
 			return d.DialContext(ctx, netw, address)
 		},
 	}
-
-	if envBool("HUI_DNS_DEBUG") {
+  
+	if debug {
 		log.Printf("dns resolver prefer_go=%v transport=%s ipv4_only=%v strict_errors=%v timeout=%s", pg, transport, ipv4Only, strict, timeout)
 	}
 }
