@@ -10,8 +10,7 @@ import (
 	"h-ui/model/bo"
 	"h-ui/model/constant"
 	"io"
-        "net/http"
-        dnsresolver "h-ui/internal/dnsresolver"
+	"net/http"
 	"time"
 )
 
@@ -43,7 +42,7 @@ func (h *Hysteria2Api) ListUsers(clear bool, secret string) (map[string]bo.Hyste
 		return nil, errors.New(constant.SysError)
 	}
 	req.Header.Set("Authorization", secret)
-        resp, err := dnsresolver.Default.HTTPClient().Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	defer func() {
 		if resp != nil {
 			_ = resp.Body.Close()
@@ -86,7 +85,7 @@ func (h *Hysteria2Api) KickUsers(keys []string, secret string) error {
 	}
 	req.Header.Set("Authorization", secret)
 	req.Header.Set("Content-Type", "application/json")
-        resp, err := dnsresolver.Default.HTTPClient().Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	defer func() {
 		if resp != nil {
 			resp.Body.Close()
@@ -114,7 +113,7 @@ func (h *Hysteria2Api) OnlineUsers(secret string) (map[string]int64, error) {
 		return nil, errors.New(constant.SysError)
 	}
 	req.Header.Set("Authorization", secret)
-        resp, err := dnsresolver.Default.HTTPClient().Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	defer func() {
 		if resp != nil {
 			_ = resp.Body.Close()

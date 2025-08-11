@@ -1,13 +1,12 @@
 package util
 
 import (
-        "fmt"
-        "h-ui/model/constant"
-        "io"
-        "net/http"
-        "os"
-        "runtime"
-        dnsresolver "h-ui/internal/dnsresolver"
+	"fmt"
+	"h-ui/model/constant"
+	"io"
+	"net/http"
+	"os"
+	"runtime"
 )
 
 func GetHysteria2BinPath() string {
@@ -32,7 +31,7 @@ func DownloadHysteria2(version string) error {
 		return err
 	}
 
-        resp, err := dnsresolver.Default.HTTPClient().Get(url)
+	resp, err := http.Get(url)
 	defer resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("failed to download file: %v", err)
