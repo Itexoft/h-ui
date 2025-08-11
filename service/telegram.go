@@ -7,9 +7,8 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 	"h-ui/dao"
-	dnsnoedns "h-ui/internal/dns"
+	dnsresolver "h-ui/internal/dnsresolver"
 	"h-ui/model/constant"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -48,7 +47,6 @@ func valid() (string, string, error) {
 }
 
 func InitTelegramBot() error {
-	logrus.Info("dns resolver: no-edns=DEFAULT (A/AAAA over UDP 512, no OPT)")
 	token, chatId, err := valid()
 	if err != nil {
 		if err.Error() == "telegram not enable" {
@@ -56,28 +54,8 @@ func InitTelegramBot() error {
 		}
 		return err
 	}
-	res := dnsnoedns.NewNoEDNSResolver()
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	tr := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-			ip, err := res.LookupAnyOnce(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			dialAddr := net.JoinHostPort(ip.String(), port)
-			return dialer.DialContext(ctx, "tcp", dialAddr)
-		},
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          100,
-		ForceAttemptHTTP2:     true,
-	}
+	res := dnsresolver.New()
+	tr := dnsresolver.NewTransport(res, "api.telegram.org")
 	httpClient := &http.Client{Transport: tr, Timeout: 15 * time.Second}
 	bot, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
 	if err != nil {

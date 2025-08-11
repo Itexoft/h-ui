@@ -157,7 +157,7 @@ version of h-ui, and import the data into the management background after the de
 
 ## DNS
 
-Telegram requests resolve through an internal A-only resolver without EDNS by default. If you need the standard OS resolver, open an issue or pull request to add a switch.
+Telegram requests resolve through an internal resolver without EDNS, preferring IPv4 with IPv6 fallback and TCP retries. If you need the standard OS resolver, open an issue or pull request to add a switch.
 
 ## FAQ
 
