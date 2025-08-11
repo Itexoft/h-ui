@@ -36,13 +36,13 @@ func NewNoEDNSResolver() *NoEDNSResolver {
 	return &NoEDNSResolver{servers: servers, timeout: 2 * time.Second, network: "udp"}
 }
 
-func (r *NoEDNSResolver) LookupAOnce(ctx context.Context, name string) (net.IP, error) {
+func (r *NoEDNSResolver) lookupQtype(ctx context.Context, name string, qtype uint16) (net.IP, error) {
 	q := new(dns.Msg)
 	q.Id = dns.Id()
 	q.RecursionDesired = true
 	q.Question = []dns.Question{{
 		Name:   dns.Fqdn(name),
-		Qtype:  dns.TypeA,
+		Qtype:  qtype,
 		Qclass: dns.ClassINET,
 	}}
 	c := &dns.Client{Net: r.network, Timeout: r.timeout, SingleInflight: true}
@@ -55,10 +55,27 @@ func (r *NoEDNSResolver) LookupAOnce(ctx context.Context, name string) (net.IP, 
 			continue
 		}
 		for _, ans := range in.Answer {
-			if arec, ok := ans.(*dns.A); ok && arec.A != nil {
-				return arec.A, nil
+			switch rr := ans.(type) {
+			case *dns.A:
+				if qtype == dns.TypeA && rr.A != nil {
+					return rr.A, nil
+				}
+			case *dns.AAAA:
+				if qtype == dns.TypeAAAA && rr.AAAA != nil {
+					return rr.AAAA, nil
+				}
 			}
 		}
 	}
-	return nil, fmt.Errorf("no A record for %s", name)
+	return nil, fmt.Errorf("no %s record for %s", dns.TypeToString[qtype], name)
+}
+
+func (r *NoEDNSResolver) LookupAnyOnce(ctx context.Context, name string) (net.IP, error) {
+	if ip, err := r.lookupQtype(ctx, name, dns.TypeA); err == nil {
+		return ip, nil
+	}
+	if ip6, err := r.lookupQtype(ctx, name, dns.TypeAAAA); err == nil {
+		return ip6, nil
+	}
+	return nil, fmt.Errorf("no A/AAAA records for %s", name)
 }
