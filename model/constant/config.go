@@ -16,6 +16,7 @@ const (
 	TelegramToken              = "TELEGRAM_TOKEN"
 	TelegramChatId             = "TELEGRAM_CHAT_ID"
 	TelegramDebug              = "TELEGRAM_DEBUG"
+	TelegramDNSServers         = "TELEGRAM_DNS_SERVERS"
 	TelegramLoginJobEnable     = "TELEGRAM_LOGIN_JOB_ENABLE"
 	TelegramLoginJobText       = "TELEGRAM_LOGIN_JOB_TEXT"
 	Telegram2FAEnable          = "TELEGRAM_2FA_ENABLE"

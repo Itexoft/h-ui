@@ -7,8 +7,8 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 	"h-ui/dao"
-	dnsresolver "h-ui/internal/dnsresolver"
 	"h-ui/model/constant"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -69,18 +69,28 @@ func InitTelegramBot() error {
 		return err
 	}
 	logrus.Infof("telegram token length=%d chatId=%s", len(token), chatId)
-	res := dnsresolver.New()
-	logrus.Info("dns resolver created")
-	a, aaaa, dnsErr := res.LookupAll(context.Background(), "api.telegram.org")
-	if dnsErr != nil {
-		logrus.Errorf("dns lookup api.telegram.org err: %v", dnsErr)
-	} else {
-		logrus.Infof("dns lookup api.telegram.org a=%v aaaa=%v", a, aaaa)
+	dnsServers := os.Getenv(constant.TelegramDNSServers)
+	if dnsServers != "" {
+		for _, s := range strings.Split(dnsServers, ",") {
+			addr := strings.TrimSpace(s)
+			if addr == "" {
+				continue
+			}
+			r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{}
+				return d.DialContext(ctx, "udp", net.JoinHostPort(addr, "53"))
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := r.LookupHost(ctx, "api.telegram.org")
+			cancel()
+			if err == nil {
+				net.DefaultResolver = r
+				logrus.Infof("telegram dns server %s", addr)
+				break
+			}
+		}
 	}
-	tr := dnsresolver.NewTransport(res, "api.telegram.org")
-	logrus.Info("dns transport created")
-	httpClient := &http.Client{Transport: tr, Timeout: 15 * time.Second}
-	logrus.Info("http client created")
+	httpClient := &http.Client{Timeout: 15 * time.Second}
 	logrus.Info("creating telegram bot api")
 	bot, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
 	if err != nil {
